@@ -12,3 +12,4 @@ To get started follow the directions below
  - Inside explorer (ctrl + shift + r) select the platformio.ini file and change the upload port to the port assigned to your arduino
    - This can be found by running "mode" in the terminal
  - Add code to the Controller.c or Robot.c files then click build or upload under the controller or robot tasks in the platformIO tab
+- Hi this is an update
