@@ -1,16 +1,18 @@
 //include this .c file's header file
 #include "Controller.h"
 #include "adc.h"  // Include ADC library
-#define MAX_DISTANCE   30   // Maximum possible distance
-#define RANGE_SENSOR_CHANNEL 0  // ADC Channel 0 (A0)
-#define F_CPU 16000000UL
+//#define F_CPU 16000000UL // 16MHz
 #define OCR1A_VALUE 249  // 1ms Timer Compare Match Value
+
+
 
 
 volatile uint16_t mseconds = 0;
 volatile uint8_t seconds = 0;
 volatile uint8_t minutes = 0;
 volatile uint8_t running = 1;  // Stopwatch state (1 = running, 0 = stopped)
+
+
 
 
 // ------------------------ Timer Initialization ------------------------ //
@@ -24,10 +26,14 @@ void timer1_init() {
 }
 
 
+
+
 // ------------------------ Button Interrupts ------------------------ //
 void button_init() {
     DDRD &= ~((1 << PD2) | (1 << PD3));  // PD2 (INT0) & PD3 (INT1) as input
     PORTD |= (1 << PD2) | (1 << PD3);  // Enable pull-ups
+
+
 
 
     EICRA |= (1 << ISC01) | (1 << ISC00);  // INT0: Rising edge (Start/Stop)
@@ -35,6 +41,8 @@ void button_init() {
    
     EIMSK |= (1 << INT0) | (1 << INT1);  // Enable external interrupts INT0 & INT1
 }
+
+
 
 
 // ------------------------ Timer Interrupt (1ms) ------------------------ //
@@ -53,10 +61,14 @@ ISR(TIMER1_COMPA_vect) {
 }
 
 
+
+
 // ------------------------ Start/Stop Interrupt (INT0) ------------------------ //
 ISR(INT0_vect) {
     running = !running;  // Toggle stopwatch state
 }
+
+
 
 
 // ------------------------ Reset Interrupt (INT1) ------------------------ //
@@ -68,6 +80,8 @@ ISR(INT1_vect) {
 }
 
 
+
+
 // ------------------------ Main Function ------------------------ //
 int main(void) {
     cli();  // Disable global interrupts
@@ -77,7 +91,11 @@ int main(void) {
     sei();  // Enable global interrupts
 
 
+
+
     char buffer[32];
+
+
 
 
     while (1) {
@@ -88,6 +106,8 @@ int main(void) {
             while (!(UCSR0A & (1 << UDRE0)));  // Wait for empty buffer
             UDR0 = *ptr;  // Transmit character
         }
+
+
 
 
         _delay_ms(100);  // Update every 100ms to avoid excessive serial output
