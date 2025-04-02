@@ -1,8 +1,15 @@
 //include this .c file's header file
 #include "Controller.h"
 #include "adc.h"  // Include ADC library
+#include <stdint.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
 //#define F_CPU 16000000UL // 16MHz
 #define OCR1A_VALUE 249  // 1ms Timer Compare Match Value
+#define SERVO_MIN_PULSE 1000 //Minimum pulse width (microseconds)
+#define SERVO_MAX_PULSE 5000 //Maximum pulse width (microseconds)
+#define JOYSTICK_ADC_CHANNEL 0 //ADC channel for joystick (e.g., ADC0)
 
 
 volatile uint16_t mseconds = 0;
@@ -83,6 +90,22 @@ ISR(INT2_vect) {
     running = 0;
 }
 
+// Function to read joystick value and map to servo pulse width
+uint16_t readJoystickAndMapServo() {
+    uint16_t adcValue = adc_read(JOYSTICK_ADC_CHANNEL); //Read ADC value
+
+    // Map ADC value (0-1023) to servo pulse width (SERVO_MIN_PULSE - SERVO_MAX_PULSE)
+    uint16_t pulseWidth = map(adcValue, 0, 1023, SERVO_MIN_PULSE, SERVO_MAX_PULSE);
+
+    // map pulse width to timer counts
+    pulseWidth = (pulseWidth * 16) / 1000; //convert microseconds to timer counts
+    return pulseWidth;
+}
+
+//Map function
+long map(long x, long in_min, long in_max, long out_min, long out_max) {
+    return (x-in_min) * (out_max) / (in_max - in_min) + out_min;
+}
 
 // ------------------------ Main Function ------------------------ //
 int main(void) {
@@ -104,7 +127,9 @@ int main(void) {
             UDR0 = *ptr;  // Transmit character
         }
 
-
+        uint16_t servoPulse = readJoystickAndMapServo();
+        OCR3A = servoPulse;
+        
         _delay_ms(100);  // Update every 100ms to avoid excessive serial output
     }
 }
