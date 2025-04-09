@@ -1,59 +1,114 @@
 #include <avr/io.h>
+#include <avr/interrupt.h>
 #include <util/delay.h>
-#include "Controller.h"
 #include "adc.h"
 
-#define SERVO_MIN_PULSE 2000    // 1 ms pulse width
-#define SERVO_MAX_PULSE 4000    // 2 ms pulse width
+// ===== Serial Protocol Constants =====
+#define START_BYTE 0xFF
+#define END_BYTE 0xFE
 
-#define JOYSTICK_X_CHANNEL 0    // ADC0 = A0
-#define JOYSTICK_Y_CHANNEL 1    // ADC1 = A1
+// ===== ADC Channels for Joystick =====
+#define JOYSTICK_X_CHANNEL 0
+#define JOYSTICK_Y_CHANNEL 1
 
-// Simple map function (similar to Arduino)
-long map(long x, long in_min, long in_max, long out_min, long out_max) {
-    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+// ===== Global Variables for Receiving Sensor Data from Robot =====
+volatile uint8_t serial_state = 0;
+volatile uint8_t sensor_type = 0;
+volatile uint8_t sensor_L = 0;
+volatile uint8_t sensor_R = 0;
+volatile uint8_t new_data = 0;
+
+// ===== Initialize USART0 for Serial Communication =====
+void serial0_init(void) {
+    UBRR0H = 0;
+    UBRR0L = 103; // 9600 baud rate at 16 MHz
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0); // Enable RX, TX, and interrupt
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // 8-bit character size
 }
 
-void timer1_pwm_init() {
-    DDRB |= (1 << PB5); // Set PB5 (OC1A) as output
-
-    TCCR1A = (1 << COM1A1) | (1 << WGM11);
-    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler 8
-    ICR1 = 40000;  // 20 ms period (50Hz)
-
-    OCR1A = 3000;  // Center servo initially
+// ===== Send a Single Byte Over Serial =====
+void serial0_send(uint8_t byte) {
+    while (!(UCSR0A & (1 << UDRE0))); // Wait until buffer is empty
+    UDR0 = byte; // Send byte
 }
 
-void timer3_pwm_init() {
-    DDRE |= (1 << PE3); // Set PE3 (OC3A) as output 000001000 
-
-    TCCR3A = (1 << COM3A1) | (1 << WGM31);
-    TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31); // Prescaler 8
-    ICR3 = 40000;   //20 ms period (50Hz)
-
-    OCR3A = 3000;  // Center servo initially
+// ===== Send a 5-byte Packet with Joystick Data to the Robot =====
+void serial0_send_packet(uint8_t x, uint8_t y) {
+    serial0_send(START_BYTE);
+    serial0_send(0x01);     // Command ID for joystick
+    serial0_send(x);
+    serial0_send(y);
+    serial0_send(END_BYTE);
 }
 
+// ===== Print Status Message Based on Received Sensor Values =====
+void display_status() {
+    if (sensor_L > 200 && sensor_R > 200)
+        serial0_send_string("Robot is STOPPED\n");
+    else if (sensor_L < 150 && sensor_R < 150)
+        serial0_send_string("Moving FORWARD\n");
+    else if (sensor_L < sensor_R)
+        serial0_send_string("Turning LEFT\n");
+    else
+        serial0_send_string("Turning RIGHT\n");
+}
+
+// ===== Send a Full String Over Serial =====
+void serial0_send_string(const char *s) {
+    while (*s) {
+        serial0_send(*s++);
+    }
+}
+
+// ===== USART Receive Interrupt Handler (Reads 5-byte Packet) =====
+ISR(USART_RX_vect) {
+    uint8_t byte = UDR0;
+
+    switch (serial_state) {
+        case 0:
+            if (byte == START_BYTE) serial_state = 1;
+            break;
+        case 1:
+            sensor_type = byte;
+            serial_state = 2;
+            break;
+        case 2:
+            sensor_L = byte;
+            serial_state = 3;
+            break;
+        case 3:
+            sensor_R = byte;
+            serial_state = 4;
+            break;
+        case 4:
+            if (byte == END_BYTE) new_data = 1;
+            serial_state = 0;
+            break;
+        default:
+            serial_state = 0;
+    }
+}
+
+// ===== MAIN PROGRAM (Controller) =====
 int main(void) {
-    adc_init();           // Initialise ADC
-    timer1_pwm_init();    // Servo 1 on OC1A (Pin 11)
-    timer3_pwm_init();    // Servo 2 on OC3A (Pin 5)
+    adc_init();         // Initialize ADC for joystick
+    serial0_init();     // Initialize serial
+    sei();              // Enable global interrupts
 
     while (1) {
-        // Read both joystick channels
-        uint16_t joyX = adc_read(JOYSTICK_X_CHANNEL); // A0
-        uint16_t joyY = adc_read(JOYSTICK_Y_CHANNEL); // A1
+        // Read joystick ADC (10-bit ➝ 8-bit scale)
+        uint16_t x = adc_read(JOYSTICK_X_CHANNEL);
+        uint16_t y = adc_read(JOYSTICK_Y_CHANNEL);
 
-        // Map joystick positions to servo pulse widths
-        uint16_t pulse1 = map(joyX, 0, 1023, SERVO_MIN_PULSE, SERVO_MAX_PULSE);
-        uint16_t pulse2 = map(joyY, 0, 1023, SERVO_MIN_PULSE, SERVO_MAX_PULSE);
+        // Send joystick position to robot
+        serial0_send_packet(x >> 2, y >> 2);
 
-        // Update each servo
-        OCR1A = pulse1;  // Servo 1
-        OCR3A = pulse2;  // Servo 2
+        // If sensor data was received from robot, interpret it
+        if (new_data) {
+            display_status(); // Print interpreted message
+            new_data = 0;
+        }
 
-        _delay_ms(20); // Refresh rate ~50Hz
+        _delay_ms(200); // Communication refresh rate
     }
-
-    return 0;
 }
