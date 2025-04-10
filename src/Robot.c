@@ -2,40 +2,55 @@
 #include <avr/interrupt.h>
 #include <util/delay.h>
 #include "adc.h"
+#include "serial.h"
 
-int main(void)
-{
-    //Main function initialisation
-    serial2_init();
-    milliseconds_init();
-    uint32_t current_ms, last_send_ms;
-    uint8_t databyte1 = 0;
-    uint8_t databyte2 = 0;
-    uint8_t recievedData[2]; //recieved data array
-    char serial_string[60] = {0}; //String used for printing to terminal
+#define RANGE_LEFT_CHANNEL 0
+#define RANGE_RIGHT_CHANNEL 1
+#define SERVO_MIN_PULSE 2000
+#define SERVO_MAX_PULSE 4000
 
-    while(1)
-    {
-       //main loop
-       current_ms = milliseconds_now();
-       
-       //sending section
-       if( (current_ms-last_send_ms) >= 100) //sending rate controlled here
-       {
-        //Arbitrary process to update databytes
-        databyte1++;
-        databyte2+=2;
+long map(long x, long in_min, long in_max, long out_min, long out_max) {
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
 
-        //Function takes the number of bytes to send followed by the databytes as arguments
-        serial2_write_bytes(2, databyte1, databyte2);
-        last_send_ms = current_ms;
-       }
-       if(serial2_available()) //Returns true if new data available on serial buffer
-       {
-        //Function takes the array to return data to and the number of bytes to be read
-        serial2_get_data(recievedData,2);
-        sprintf(serial_string,"\nData 1: %3u, Data2: %3u", recievedData[0],recievedData[1]); //Format string
-        serial0_print_string(serial_string); //Print string to usb serial
-       }
+int main(void) {  
+    adc_init();
+
+    // Set PB5 (OC1A) as output for servo
+    DDRB |= (1 << PB5);
+
+    // Configure Timer1 for Fast PWM Mode 14 (ICR1 as TOP)
+    TCCR1A = (1 << COM1A1) | (1 << WGM11);
+    TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11); // Prescaler = 8
+    ICR1 = 39999;
+    OCR1A = 3000;
+
+    serial2_init();  // UART to controller
+    serial0_init();  // USB debug
+    sei();
+
+    uint8_t received[2];
+    uint8_t rangeL, rangeR;
+
+    while (1) {
+        // Receive joystick data
+        if (serial2_available()) {
+            serial2_get_data(received, 2);
+            uint8_t joystickX = received[0];
+
+            // Control servo
+            OCR1A = map(joystickX, 0, 255, SERVO_MIN_PULSE, SERVO_MAX_PULSE);
+
+            // Read range sensors (ADC0 and ADC1)
+            rangeL = adc_read(RANGE_LEFT_CHANNEL) >> 2;
+            rangeR = adc_read(RANGE_RIGHT_CHANNEL) >> 2;
+
+            // Send both sensor values back to controller
+            serial2_write_bytes(2, rangeL, rangeR);
+        }
+
+        _delay_ms(10);
     }
+
+    return 0;
 }
