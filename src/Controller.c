@@ -3,61 +3,67 @@
 #include "adc.h"
 #include "serial.h"
 #include "hd44780.h"
+#include <string.h>
+#include <stdio.h>
 
 #define JOYSTICK_X_CHANNEL 0
 #define JOYSTICK_Y_CHANNEL 1
-
-uint8_t estimate_distance_cm(uint8_t adc_val) {
-    uint16_t raw_adc = adc_val << 2;
-    if (raw_adc < 10) raw_adc = 10;  // prevent divide by 0
-    return 4800 / raw_adc; // rough scaling to cm
-}
+#define JOYSTICK_Z_CHANNEL [?]
 
 int main(void) {
-    adc_init();
-    serial2_init();
-    lcd_init();
-    sei();
+    adc_init();         // Initialize ADC to read analog signals
+    serial2_init();     // USART2: for wireless communication with the robot
+    lcd_init();         // Initialize LCD display
+    sei();              // Enable global interrupts if needed
 
-    uint16_t x, y;
-    uint8_t sensorData[2];
+    uint16_t x, y, z;
+    uint8_t x_val, y_val, z_val;
     char line[17];
+    char rx_buffer[8];
+    uint8_t rx_index = 0;
+    char received;
+
+    uint8_t battery_low = 0;  // <--- New flag
 
     while (1) {
-        // 1. Read joystick
-        x = adc_read(JOYSTICK_X_CHANNEL);
-        y = adc_read(JOYSTICK_Y_CHANNEL);
-        uint8_t x_val = x >> 2;
-        uint8_t y_val = y >> 2;
+        // === 1. Check for LOW BATTERY warning ===
+        if(serial2_available())
+        {
+            serial2_get_data(1,rx_buffer);
+            if(rx_buffer[0] ==0){
+                battery_low = 1;
+            }
 
-        // 2. Send joystick to robot
-        serial2_write_bytes(2, x_val, y_val);
-
-        // 3. Wait for range sensor response
-        if (serial2_available()) {
-            serial2_get_data(sensorData, 2);
-
-            uint8_t distL = estimate_distance_cm(sensorData[0]);
-            uint8_t distR = estimate_distance_cm(sensorData[1]);
-
-            // 4. Display distances
-            lcd_clrscr();
-            lcd_goto(0);
-            snprintf(line, 17, "L:%2ucm R:%2ucm", distL, distR);
-            lcd_puts(line);
-
-            lcd_goto(64);  // second row
-            if (distL > 35 && distR > 35)
-                lcd_puts("Robot: STOPPED ");
-            else if (distL < 20 && distR < 20)
-                lcd_puts("Moving FORWARD ");
-            else if (distL < distR)
-                lcd_puts("Turning RIGHT   ");
-            else
-                lcd_puts("Turning LEFT  ");
         }
 
-        _delay_ms(200);
+        // === 2. Display LOW BATTERY if triggered ===
+        if (battery_low) {
+            lcd_clrscr();
+            lcd_goto(0);
+            lcd_puts("! LOW BATTERY !");
+            _delay_ms(2000);  // Stay visible 3s
+            // lcd_clrscr();
+            continue;         // Skip joystick update
+        }
+
+        // === 3. Read joystick analog values ===
+        x = adc_read(JOYSTICK_X_CHANNEL);
+        y = adc_read(JOYSTICK_Y_CHANNEL);
+        z = adc_read(JOYSTICK_Z_CHANNEL);
+        x_val = x >> 2;
+        y_val = y >> 2;
+        z_val = z >> 2;
+
+        // === 4. Send X/Y over serial to robot ===
+        serial2_write_bytes(3, x_val, y_val, z_val);
+
+        // === 5. Display on LCD ===
+        // lcd_clrscr();
+        // lcd_goto(0);
+        // snprintf(line, 17, "X:%3u Y:%3u", x_val, y_val);
+        // lcd_puts(line);
+
+        _delay_ms(100);
     }
 
     return 0;
