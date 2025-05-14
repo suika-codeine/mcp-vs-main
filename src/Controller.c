@@ -8,8 +8,86 @@
 
 #define JOYSTICK_X_CHANNEL 0
 #define JOYSTICK_Y_CHANNEL 1
-#define JOYSTICK_Z_CHANNEL [?]
 
+// ===== Global Variables for Receiving Sensor Data from Robot =====
+volatile uint8_t serial_state = 0;
+volatile uint8_t sensor_type = 0;
+volatile uint8_t sensor_L = 0;
+volatile uint8_t sensor_R = 0;
+volatile uint8_t new_data = 0;
+
+// ===== Initialize USART0 for Serial Communication =====
+void serial0_init(void) {
+    UBRR0H = 0;
+    UBRR0L = 103; // 9600 baud rate at 16 MHz
+    UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0); // Enable RX, TX, and interrupt
+    UCSR0C = (1 << UCSZ01) | (1 << UCSZ00); // 8-bit character size
+}
+
+// ===== Send a Single Byte Over Serial =====
+void serial0_send(uint8_t byte) {
+    while (!(UCSR0A & (1 << UDRE0))); // Wait until buffer is empty
+    UDR0 = byte; // Send byte
+}
+
+// ===== Send a 5-byte Packet with Joystick Data to the Robot =====
+void serial0_send_packet(uint8_t x, uint8_t y) {
+    serial0_send(START_BYTE);
+    serial0_send(0x01);     // Command ID for joystick
+    serial0_send(x);
+    serial0_send(y);
+    serial0_send(END_BYTE);
+}
+
+// ===== Print Status Message Based on Received Sensor Values =====
+void display_status() {
+    if (sensor_L > 200 && sensor_R > 200)
+        serial0_send_string("Robot is STOPPED\n");
+    else if (sensor_L < 150 && sensor_R < 150)
+        serial0_send_string("Moving FORWARD\n");
+    else if (sensor_L < sensor_R)
+        serial0_send_string("Turning LEFT\n");
+    else
+        serial0_send_string("Turning RIGHT\n");
+}
+
+// ===== Send a Full String Over Serial =====
+void serial0_send_string(const char *s) {
+    while (*s) {
+        serial0_send(*s++);
+    }
+}
+
+// ===== USART Receive Interrupt Handler (Reads 5-byte Packet) =====
+ISR(USART_RX_vect) {
+    uint8_t byte = UDR0;
+
+    switch (serial_state) {
+        case 0:
+            if (byte == START_BYTE) serial_state = 1;
+            break;
+        case 1:
+            sensor_type = byte;
+            serial_state = 2;
+            break;
+        case 2:
+            sensor_L = byte;
+            serial_state = 3;
+            break;
+        case 3:
+            sensor_R = byte;
+            serial_state = 4;
+            break;
+        case 4:
+            if (byte == END_BYTE) new_data = 1;
+            serial_state = 0;
+            break;
+        default:
+            serial_state = 0;
+    }
+}
+
+// ===== MAIN PROGRAM (Controller) =====
 int main(void) {
     adc_init();         // Initialize ADC to read analog signals
     serial2_init();     // USART2: for wireless communication with the robot
@@ -26,45 +104,19 @@ int main(void) {
     uint8_t battery_low = 0;  // <--- New flag
 
     while (1) {
-        // === 1. Check for LOW BATTERY warning ===
-        if(serial2_available())
-        {
-            serial2_get_data(1,rx_buffer);
-            if(rx_buffer[0] ==0){
-                battery_low = 1;
-            }
+        // Read joystick ADC (10-bit ➝ 8-bit scale)
+        uint16_t x = adc_read(JOYSTICK_X_CHANNEL);
+        uint16_t y = adc_read(JOYSTICK_Y_CHANNEL);
 
+        // Send joystick position to robot
+        serial0_send_packet(x >> 2, y >> 2);
+
+        // If sensor data was received from robot, interpret it
+        if (new_data) {
+            display_status(); // Print interpreted message
+            new_data = 0;
         }
 
-        // === 2. Display LOW BATTERY if triggered ===
-        if (battery_low) {
-            lcd_clrscr();
-            lcd_goto(0);
-            lcd_puts("! LOW BATTERY !");
-            _delay_ms(2000);  // Stay visible 3s
-            // lcd_clrscr();
-            continue;         // Skip joystick update
-        }
-
-        // === 3. Read joystick analog values ===
-        x = adc_read(JOYSTICK_X_CHANNEL);
-        y = adc_read(JOYSTICK_Y_CHANNEL);
-        z = adc_read(JOYSTICK_Z_CHANNEL);
-        x_val = x >> 2;
-        y_val = y >> 2;
-        z_val = z >> 2;
-
-        // === 4. Send X/Y over serial to robot ===
-        serial2_write_bytes(3, x_val, y_val, z_val);
-
-        // === 5. Display on LCD ===
-        // lcd_clrscr();
-        // lcd_goto(0);
-        // snprintf(line, 17, "X:%3u Y:%3u", x_val, y_val);
-        // lcd_puts(line);
-
-        _delay_ms(100);
+        _delay_ms(200); // Communication refresh rate
     }
-
-    return 0;
 }
