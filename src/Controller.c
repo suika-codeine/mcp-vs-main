@@ -1,11 +1,12 @@
 #include <avr/io.h>
 #include <util/delay.h>
 #include "adc.h"
-#include "serial.h"
-#include "hd44780.h"
-#include <string.h>
-#include <stdio.h>
 
+// ===== Serial Protocol Constants =====
+#define START_BYTE 0xFF
+#define END_BYTE 0xFE
+
+// ===== ADC Channels for Joystick =====
 #define JOYSTICK_X_CHANNEL 0
 #define JOYSTICK_Y_CHANNEL 1
 
@@ -89,19 +90,9 @@ ISR(USART_RX_vect) {
 
 // ===== MAIN PROGRAM (Controller) =====
 int main(void) {
-    adc_init();         // Initialize ADC to read analog signals
-    serial2_init();     // USART2: for wireless communication with the robot
-    lcd_init();         // Initialize LCD display
-    sei();              // Enable global interrupts if needed
-
-    uint16_t x, y, z;
-    uint8_t x_val, y_val, z_val;
-    char line[17];
-    char rx_buffer[8];
-    uint8_t rx_index = 0;
-    char received;
-
-    uint8_t battery_low = 0;  // <--- New flag
+    adc_init();         // Initialize ADC for joystick
+    serial0_init();     // Initialize serial
+    sei();              // Enable global interrupts
 
     while (1) {
         // Read joystick ADC (10-bit ➝ 8-bit scale)
