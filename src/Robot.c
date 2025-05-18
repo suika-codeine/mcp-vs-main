@@ -16,7 +16,7 @@
 #define BATTERY_CHANNEL       4  // A4 (voltage divider)
 
 // Battery monitor
-#define BATTERY_LOW_ADC       593     // Corresponds to 7.0V with 3.3k/4.7k divider
+#define BATTERY_LOW_ADC       1000     // Corresponds to 7.0V with 3.3k/4.7k divider
 #define BATTERY_LED_PIN       PB7     // LED connected to PB7
 
 // Beacon detection
@@ -25,12 +25,17 @@
 #define DEBOUNCE_DELAY_MS 5
 
 // Movement thresholds
-#define MOTOR_SPEED      80
-#define FRONT_THRESHOLD  300
-#define LR_THRESHOLD     180
+#define MOTOR_SPEED     80
+#define FRONT_THRESHOLD 250
+#define LR_THRESHOLD    300
+#define FRONT_CLOSE     150
 
 static int16_t lm = 0;
 static int16_t rm = 0;
+
+uint8_t beaconCooldown = 0;
+
+uint8_t currentSpeed = MOTOR_SPEED;
 
 // ------------------------ Motor + PWM Setup ------------------------
 
@@ -138,25 +143,54 @@ uint16_t measure_beacon_frequency_mHz() {
 
 // ------------------------ Movement Wrappers ------------------------
 
-void go_forward()     { set_motor_speeds(MOTOR_SPEED, MOTOR_SPEED); }
-void rotate_right()   { set_motor_speeds(MOTOR_SPEED, -MOTOR_SPEED); }
-void rotate_left()    { set_motor_speeds(-MOTOR_SPEED, MOTOR_SPEED); }
+void go_forward()     { set_motor_speeds(currentSpeed, currentSpeed); }
+void rotate_right()   { set_motor_speeds(currentSpeed, -currentSpeed); }
+void rotate_left()    { set_motor_speeds(-currentSpeed, currentSpeed); }
 void stop()           { set_motor_speeds(0, 0); }
+
+void debugSlow()
+{
+    char debug[32];
+    snprintf(debug, sizeof(debug), "Slowing Down %5s", currentSpeed);
+    serial0_print_string(debug);
+}
+
+void debugFast()
+{
+    char debug[32];
+    snprintf(debug, sizeof(debug), "Speeding Up %5s", currentSpeed);
+    serial0_print_string(debug);
+}
+
+void reset_speed()
+{
+    //debugFast();
+    currentSpeed = MOTOR_SPEED;
+}
+
+void slow_speed()
+{
+    //debugSlow();
+    currentSpeed = MOTOR_SPEED - 10;
+}
 
 void turn_left() {
     stop();
+    reset_speed();
     rotate_left();
     _delay_ms(750);
 }
 
 void turn_right() {
     stop();
+    reset_speed();
     rotate_right();
     _delay_ms(750);
 }
 
 void turn_180() {
     stop();
+    reset_speed();
     rotate_left();
     _delay_ms(1500);
 }
@@ -192,7 +226,7 @@ int main(void) {
 
     char msg[64];
     uint16_t front, right, left;
-    bool wallInFront, wallOnLeft, wallOnRight;
+    bool wallInFront, wallOnLeft, wallOnRight, frontWallClose;
 
     while (1) {
         front = average_ADC(FRONT_SENSOR_CHANNEL);
@@ -202,37 +236,65 @@ int main(void) {
         wallInFront = (front > FRONT_THRESHOLD);
         wallOnLeft  = (left  > LR_THRESHOLD);
         wallOnRight = (right > LR_THRESHOLD);
+        frontWallClose = (front > FRONT_CLOSE);
 
         //Print formatted cm values
         uint16_t front_cm = adc_to_cm_front(front);
         uint16_t right_cm = adc_to_cm_side(right);
         uint16_t left_cm  = adc_to_cm_side(left);
 
-        snprintf(msg, sizeof(msg), "FRONT: %2ucm | RIGHT: %2ucm | LEFT: %2ucm\n", front_cm, right_cm, left_cm);
+
+        snprintf(msg, sizeof(msg), "FRONT: %ucm | RIGHT: %ucm | LEFT: %ucm\n", front, right, left);
         serial0_print_string(msg);
+
+        //snprintf(msg, sizeof(msg), "FRONT: %2ucm | RIGHT: %2ucm | LEFT: %2ucm\n", front_cm, right_cm, left_cm);
+        //serial0_print_string(msg);
 
         // Battery check
         check_battery_and_update_led();
 
         // Beacon check
-        if (beacon_detected()) {
-            stop();
-            _delay_ms(100);
+        if (beaconCooldown == 0)
+        {
+            if (beacon_detected()) {
+                stop();
+                _delay_ms(100);
 
-            uint16_t beacon_freq_mHz = measure_beacon_frequency_mHz();
-            snprintf(msg, sizeof(msg), "Beacon Freq: %u.%03u Hz\n",
-                     beacon_freq_mHz / 1000,
-                     beacon_freq_mHz % 1000);
-            serial0_print_string(msg);
-            _delay_ms(500);
+                uint16_t beacon_freq_mHz = measure_beacon_frequency_mHz();
+                snprintf(msg, sizeof(msg), "Beacon Freq: %u.%03u Hz\n",
+                        beacon_freq_mHz / 1000,
+                        beacon_freq_mHz % 1000);
+                serial0_print_string(msg);
+                _delay_ms(500);
+                beaconCooldown++;
+            }
+        }
+        else
+        {
+            beaconCooldown++;
+            if (beaconCooldown == 5)
+            {
+                beaconCooldown = 0;
+            }
         }
 
         // Movement logic
+        if (frontWallClose)
+        {
+            slow_speed();
+        }
+        else
+        {
+            reset_speed();
+        }
+
         if (wallInFront) {
             stop();
-            if (wallOnLeft && wallOnRight) {
-                // turn_180(); // Optional: Uncomment to escape dead end
-            } else {
+            if (!wallOnLeft && !wallOnRight) {
+                turn_right();
+            }
+            else
+            {
                 if (wallOnLeft) {
                     turn_right();
                 }
