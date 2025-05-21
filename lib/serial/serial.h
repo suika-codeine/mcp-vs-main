@@ -2,9 +2,9 @@
  * Serial.h
  *
  * Created: 1/03/1015 5:41:43 PM
- *  Author: Robert
- *  Modified: Tristan Feb 2025
- */ 
+ * Author: Robert
+ * Modified: Tristan Feb 2025
+ */
 
 
 #ifndef SERIAL_H_
@@ -26,9 +26,44 @@
 # define BAUD_PRESCALE  ((((F_CPU/16)+(USART_BAUDRATE/2))/(USART_BAUDRATE))-1)
 # define BAUD_PRESCALE0 ((((F_CPU/16)+(USART_BAUDRATE0/2))/(USART_BAUDRATE0))-1)
 
+// Declare volatile global variables from serial.c as extern so other files can access them
+extern volatile bool serial0DataReady;
+extern volatile bool serial1DataReady;
+extern volatile bool serial2DataReady;
+extern volatile bool serial3DataReady;
+
+extern volatile uint8_t serial0DataByte1;
+extern volatile uint8_t serial0DataByte2;
+extern volatile uint8_t serial0DataByte3;
+extern volatile uint8_t serial0DataByte4;
+extern volatile uint8_t serial0DataByte5;
+extern volatile uint8_t serial0DataByte6;
+
+extern volatile uint8_t serial1DataByte1;
+extern volatile uint8_t serial1DataByte2;
+extern volatile uint8_t serial1DataByte3;
+extern volatile uint8_t serial1DataByte4;
+extern volatile uint8_t serial1DataByte5;
+extern volatile uint8_t serial1DataByte6;
+
+extern volatile uint8_t serial2DataByte1;
+extern volatile uint8_t serial2DataByte2;
+extern volatile uint8_t serial2DataByte3;
+extern volatile uint8_t serial2DataByte4;
+extern volatile uint8_t serial2DataByte5;
+extern volatile uint8_t serial2DataByte6;
+
+extern volatile uint8_t serial3DataByte1;
+extern volatile uint8_t serial3DataByte2;
+extern volatile uint8_t serial3DataByte3;
+extern volatile uint8_t serial3DataByte4;
+extern volatile uint8_t serial3DataByte5;
+extern volatile uint8_t serial3DataByte6;
+
+
 //function prototypes
 
-//Initialize serial 0 UART 
+//Initialize serial 0 UART
 void serial0_init(void);
 //Use to test if new data is available on UART0
 bool serial0_available();
@@ -43,7 +78,7 @@ void serial0_get_data(uint8_t *data, uint8_t size);
 // ISR executed whenever a new byte is available in the serial buffer
 ISR(USART0_RX_vect);
 
-//Initialize serial 1 UART 
+//Initialize serial 1 UART
 void serial1_init(void);
 //Use to test if new data is available on UART1
 bool serial1_available();
@@ -58,7 +93,7 @@ void serial1_get_data(uint8_t *data, uint8_t size);
 // ISR executed whenever a new byte is available in the serial buffer
 ISR(USART1_RX_vect);
 
-//Initialize serial 2 UART 
+//Initialize serial 2 UART
 void serial2_init(void);
 //Use to test if new data is available on UART2
 bool serial2_available();
@@ -71,9 +106,9 @@ void serial2_write_bytes(uint8_t numBytes, ...);
 //Reads 1-6 data bytes available from UART2
 void serial2_get_data(uint8_t *data, uint8_t size);
 // ISR executed whenever a new byte is available in the serial buffer
-ISR(USART2_RX_vect);  
+ISR(USART2_RX_vect);
 
-//Initialize serial 3 UART 
+//Initialize serial 3 UART
 void serial3_init(void);
 //Use to test if new data is available on UART3
 bool serial3_available();
