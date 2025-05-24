@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "hd44780.h": "c"
+        "hd44780.h": "c",
+        "interrupt.h": "c"
     }
 }

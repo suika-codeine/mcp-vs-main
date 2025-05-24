@@ -421,68 +421,60 @@ void send_mode_status(RobotMode mode) {
  * This function should be called periodically in the main loop.
  */
 void process_incoming_serial_data() {
-    if (serial2_available()) {
-        uint8_t data[6]; // Max 6 data bytes
-        uint8_t num_bytes; // This will store the actual number of data bytes received (excluding start/end/numBytes)
-
-        // It's crucial to know how many bytes to expect for serial2_get_data.
-        // The serial.c ISR sets serial2DataReady when a full packet is received,
-        // and numBytes is the total length including start/end bytes.
-        // We need to retrieve the actual payload size from the second byte of the packet.
-        // A better approach would be to modify serial_get_data to return the actual payload.
-        // For now, let's assume we read up to 6 bytes and parse based on the command.
+    if (serial2_available()) { // Checks if there's data available on serial2
+        char debug_msg[64]; // Buffer for debug messages
 
         // Temporarily disable interrupts while reading volatile global variables
-        cli();
+        cli(); // Disable global interrupts
         // Access the global volatile variables directly as serial2_get_data might not be flexible enough
         // to get the numBytes from the second byte of the packet before getting the data.
         // This is a workaround given the current serial.c implementation.
         // A more robust serial library would allow peeking at the numBytes or passing it.
-        uint8_t temp_serial2DataByte1 = serial2DataByte1;
-        uint8_t temp_serial2DataByte2 = serial2DataByte2;
-        uint8_t temp_serial2DataByte3 = serial2DataByte3;
-        uint8_t temp_serial2DataByte4 = serial2DataByte4;
-        uint8_t temp_serial2DataByte5 = serial2DataByte5;
-        uint8_t temp_serial2DataByte6 = serial2DataByte6;
-        bool temp_serial2DataReady = serial2DataReady;
+        uint8_t temp_serial2DataByte1 = serial2DataByte1; // Get first data byte
+        uint8_t temp_serial2DataByte2 = serial2DataByte2; // Get second data byte
+        uint8_t temp_serial2DataByte3 = serial2DataByte3; // Get third data byte
+        uint8_t temp_serial2DataByte4 = serial2DataByte4; // Get fourth data byte
+        uint8_t temp_serial2DataByte5 = serial2DataByte5; // Get fifth data byte
+        uint8_t temp_serial2DataByte6 = serial2DataByte6; // Get sixth data byte
+        bool temp_serial2DataReady = serial2DataReady; // Checks if the serial data is ready
         serial2DataReady = false; // Clear the flag after reading
-        sei();
+        sei(); // Enable global interrupts
 
-        if (temp_serial2DataReady) {
+        if (temp_serial2DataReady) { // If serial data is ready
             uint8_t command_type = temp_serial2DataByte1; // First data byte is command type
 
             switch (command_type) {
-                case CMD_SET_MODE:
+                case CMD_SET_MODE: // If the command is to set the mode
                     // Expected payload: [Mode (0=Autonomous, 1=Remote)]
-                    if (temp_serial2DataByte2 == 0) {
-                        currentRobotMode = MODE_AUTONOMOUS;
+                    if (temp_serial2DataByte2 == 0) { // If mode is 0 (Autonomous)
+                        currentRobotMode = MODE_AUTONOMOUS; // Set mode to autonomous
                         stop(); // Stop motors when switching modes
-                        serial0_print_string("Switched to Autonomous Mode\n");
-                    } else if (temp_serial2DataByte2 == 1) {
-                        currentRobotMode = MODE_REMOTE_CONTROL;
+                        serial0_print_string("Robot: Switched to Autonomous Mode\n"); // Debug message
+                    } else if (temp_serial2DataByte2 == 1) { // If mode is 1 (Remote Control)
+                        currentRobotMode = MODE_REMOTE_CONTROL; // Set mode to remote control
                         stop(); // Stop motors when switching modes
-                        serial0_print_string("Switched to Remote Control Mode\n");
+                        serial0_print_string("Robot: Switched to Remote Control Mode\n"); // Debug message
                     }
                     send_mode_status(currentRobotMode); // Confirm mode change to controller
                     break;
 
-                case CMD_JOYSTICK_DATA:
+                case CMD_JOYSTICK_DATA: // If the command is joystick data
                     // Expected payload: [X_val] [Y_val]
-                    if (currentRobotMode == MODE_REMOTE_CONTROL) {
-                        received_x_val = temp_serial2DataByte2;
-                        received_y_val = temp_serial2DataByte3;
+                    if (currentRobotMode == MODE_REMOTE_CONTROL) { // Only update if in RC mode
+                        received_x_val = temp_serial2DataByte2; // Store X-axis value
+                        received_y_val = temp_serial2DataByte3; // Store Y-axis value
                     }
                     break;
 
-                case CMD_SERVO_DATA:
+                case CMD_SERVO_DATA: // If the command is servo data
                     // Expected payload: [Servo_val]
-                    if (currentRobotMode == MODE_REMOTE_CONTROL) {
-                        received_servo_val = temp_serial2DataByte2;
+                    if (currentRobotMode == MODE_REMOTE_CONTROL) { // Only update if in RC mode
+                        received_servo_val = temp_serial2DataByte2; // Store servo value
                     }
                     break;
 
                 default:
-                    serial0_print_string("Unknown command received.\n");
+                    // Removed general "Unknown command received" debug print
                     break;
             }
         }
@@ -511,6 +503,8 @@ int main(void) {
 
     uint32_t lastSensorReportTime = 0;
     const uint32_t sensorReportInterval = 500; // Report sensor data every 500ms
+    uint32_t lastModeDebugPrintTime = 0; // New variable for mode debug print timing
+    const uint32_t modeDebugPrintInterval = 1000; // Print mode every 1 second
 
     // Initial mode status report
     send_mode_status(currentRobotMode);
@@ -519,11 +513,7 @@ int main(void) {
         // Always process incoming serial data regardless of mode
         process_incoming_serial_data();
 
-        // Add debug output for raw ADC values CHECK HERE
-        snprintf(msg, sizeof(msg), "ADC: F:%u R:%u L:%u\n", front_adc, right_adc, left_adc);
-        serial0_print_string(msg);
-
-        // --- Sensor Readings ---
+        // --- Sensor Readings (Always read, used for both modes for display/reports) ---
         front_adc = average_ADC(FRONT_SENSOR_CHANNEL);
         right_adc = average_ADC(RIGHT_SENSOR_CHANNEL);
         left_adc  = average_ADC(LEFT_SENSOR_CHANNEL);
@@ -532,62 +522,51 @@ int main(void) {
         right_cm = adc_to_cm_side(right_adc);
         left_cm  = adc_to_cm_side(left_adc);
 
-        // Update wall detection flags
-        wallInFront = (front_adc > FRONT_THRESHOLD);
-        wallOnLeft  = (left_adc  > LR_THRESHOLD);
-        wallOnRight = (right_adc > LR_THRESHOLD);
-        frontWallClose = (front_adc > FRONT_CLOSE);
-
         // Periodically send sensor data to the controller
         if (milliseconds_now() - lastSensorReportTime >= sensorReportInterval) {
             send_sensor_data((uint8_t)front_cm, (uint8_t)right_cm, (uint8_t)left_cm);
             lastSensorReportTime = milliseconds_now();
         }
 
-        // --- Battery Check ---
+        // --- Battery Check (Always check) ---
         check_battery_and_update_led();
 
         // --- Mode-specific Logic ---
         if (currentRobotMode == MODE_AUTONOMOUS) {
             // --- Autonomous Movement Logic ---
-            // if (frontWallClose) {
-            //     slow_speed();
-            // } else {
-            //     reset_speed();
-            // }
+            wallInFront = (front_adc > FRONT_THRESHOLD);
+            wallOnLeft  = (left_adc  > LR_THRESHOLD);
+            wallOnRight = (right_adc > LR_THRESHOLD);
+            frontWallClose = (front_adc > FRONT_CLOSE);
 
             if (wallInFront) {
                 stop();
-                // Prioritize turns based on wall detection, no 180-degree turn
                 if (wallOnLeft) {
-                    // If wall on left, turn right
                     turn_right();
                 } else if (wallOnRight) {
-                    // If wall on right, turn left
                     turn_left();
                 } else {
-                    // If only wall in front (no side walls), default to turning right
                     turn_right();
                 }
             } else {
-                go_forward(); // No immediate wall, keep going forward
+                go_forward();
             }
 
             // --- Autonomous Beacon Check ---
             if ((milliseconds_now() - lastBeaconDetectionTime) >= BEACON_COOLDOWN_PERIOD_MS) {
                 if (beacon_detected()) {
                     stop();
-                    _delay_ms(100); // Small delay to ensure robot is stopped
+                    _delay_ms(100);
 
                     uint16_t beacon_freq_mHz = measure_beacon_frequency_mHz();
-                    snprintf(msg, sizeof(msg), "Beacon Freq: %u.%03u Hz\n",
+                    snprintf(msg, sizeof(msg), "Robot: Beacon Freq: %u.%03u Hz\n",
                             beacon_freq_mHz / 1000,
                             beacon_freq_mHz % 1000);
-                    serial0_print_string(msg); // Print to robot's serial for debugging
+                    serial0_print_string(msg);
 
-                    send_beacon_frequency(beacon_freq_mHz); // Send to controller
-                    _delay_ms(500); // Pause after beacon detection
-                    lastBeaconDetectionTime = milliseconds_now(); // Reset cooldown timer
+                    send_beacon_frequency(beacon_freq_mHz);
+                    _delay_ms(500);
+                    lastBeaconDetectionTime = milliseconds_now();
                 }
             }
 
@@ -595,8 +574,8 @@ int main(void) {
             // --- Remote Control Movement Logic ---
             // Map 0-255 joystick values to motor speeds (-126 to 126)
             // Y-axis for forward/backward, X-axis for turning
-            int16_t y_motor = (int16_t)received_y_val - 127; // -127 to 128
-            int16_t x_motor = (int16_t)received_x_val - 127; // -127 to 128
+            int16_t y_motor = (int16_t)received_y_val - 127;
+            int16_t x_motor = (int16_t)received_x_val - 127;
 
             // Simple tank drive mixing
             int16_t left_motor_speed = y_motor + x_motor;
@@ -614,8 +593,19 @@ int main(void) {
             set_servo_position(received_servo_val);
 
             // For debugging on robot's serial monitor
-            snprintf(msg, sizeof(msg), "RC Mode: X:%u Y:%u Servo:%u\n", received_x_val, received_y_val, received_servo_val);
+            // This print is already present from previous iteration, good for RC mode
+            snprintf(msg, sizeof(msg), "Robot: RC Mode: X:%u Y:%u Servo:%u\n", received_x_val, received_y_val, received_servo_val);
             serial0_print_string(msg);
+
+            // Ensure autonomous logic doesn't interfere in RC mode
+            // No beacon detection or autonomous movement here.
+        }
+
+        // --- Debug Print for Current Mode ---
+        if (milliseconds_now() - lastModeDebugPrintTime >= modeDebugPrintInterval) {
+            snprintf(msg, sizeof(msg), "Robot Current Mode: %s\n", (currentRobotMode == MODE_AUTONOMOUS) ? "Autonomous" : "Remote Control");
+            serial0_print_string(msg);
+            lastModeDebugPrintTime = milliseconds_now();
         }
 
         _delay_ms(50); // Main loop delay to prevent busy-waiting and allow serial processing
