@@ -46,6 +46,7 @@ volatile ControllerMode robot_reported_mode = CONTROLLER_MODE_AUTONOMOUS;
 
 static uint32_t lastButtonPressTime = 0;
 const uint32_t buttonDebounceDelay = 200; // milliseconds
+static bool lastButtonState = false; // Add this global variable
 
 // --- Function Prototypes ---
 void init_mode_toggle_button(void);
@@ -92,19 +93,26 @@ int main(void) {
         y_val = y_raw >> 2; // Map 10-bit (0–1023) to 8-bit (0–255)
         servo_val = servo_raw >> 2; // Map 10-bit (0–1023) to 8-bit (0–255)
 
-        // 3. Check for mode toggle button press
-        if (is_mode_toggle_button_pressed()) { // Check if the mode toggle button is pressed
-            if (milliseconds_now() - lastButtonPressTime > buttonDebounceDelay) { // Check for debounce delay
+        // Debug: Print joystick and servo values to serial monitor
+        // char debug_line[32];
+        // snprintf(debug_line, sizeof(debug_line), "X:%3u Y:%3u S:%3u\n", x_val, y_val, servo_val);
+        // serial0_print_string(debug_line);
+
+        // 3. Check for mode toggle button press with edge detection and debounce
+        bool buttonPressed = is_mode_toggle_button_pressed();
+        if (buttonPressed && !lastButtonState) { // Rising edge: just pressed
+            if (milliseconds_now() - lastButtonPressTime > buttonDebounceDelay) {
                 // Toggle mode
-                if (currentControllerMode == CONTROLLER_MODE_AUTONOMOUS) { // If current mode is autonomous
-                    currentControllerMode = CONTROLLER_MODE_REMOTE_CONTROL; // Switch to remote control mode
-                } else { // If current mode is remote control
-                    currentControllerMode = CONTROLLER_MODE_AUTONOMOUS; // Switch to autonomous mode
+                if (currentControllerMode == CONTROLLER_MODE_AUTONOMOUS) {
+                    currentControllerMode = CONTROLLER_MODE_REMOTE_CONTROL;
+                } else {
+                    currentControllerMode = CONTROLLER_MODE_AUTONOMOUS;
                 }
-                send_mode_toggle_command(); // Send the new mode to the robot
-                lastButtonPressTime = milliseconds_now(); // Update last press time
+                send_mode_toggle_command();
+                lastButtonPressTime = milliseconds_now();
             }
         }
+        lastButtonState = buttonPressed;
 
         // 4. Send data to robot based on current mode
         if (milliseconds_now() - lastSendTime >= sendInterval) { // Check if enough time has passed since last send
@@ -165,8 +173,8 @@ void send_mode_toggle_command(void) {
 void send_joystick_and_servo_data(uint8_t x_val, uint8_t y_val, uint8_t servo_val) {
     // Packet for joystick data: [Start Byte] [Num Bytes] [Command Type] [X_val] [Y_val] [End Byte]
     // Num Bytes = 3 (Command Type, X_val, Y_val)
-    serial2_write_bytes(3, CMD_JOYSTICK_DATA, x_val, y_val); // Send joystick X and Y data
-
+    serial2_write_bytes(3, CMD_JOYSTICK_DATA, x_val, y_val);
+    _delay_ms(5);
     // Packet for servo data: [Start Byte] [Num Bytes] [Command Type] [Servo_val] [End Byte]
     // Num Bytes = 2 (Command Type, Servo_val)
     serial2_write_bytes(2, CMD_SERVO_DATA, servo_val); // Send servo data

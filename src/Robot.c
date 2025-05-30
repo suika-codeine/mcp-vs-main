@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
-#include <avr/interrupt.h> // Required for sei() and cli()
+#include <avr/interrupt.h> // Required for sei()
 #include "serial.h"
 #include "adc.h"
 #include "milliseconds.h" // For precise timing for beacon detection
@@ -18,7 +18,7 @@
 #define BATTERY_CHANNEL       4  // A4 (voltage divider)
 
 // --- Battery Monitor ---
-#define BATTERY_LOW_ADC       1000     // Corresponds to 7.0V with 3.3k/4.7k divider
+#define BATTERY_LOW_ADC       9 00     // Corresponds to 7.0V with 3.3k/4.7k divider
 #define BATTERY_LED_PIN       PB7     // LED connected to PB7
 
 // --- Beacon Detection ---
@@ -34,9 +34,11 @@
 #define FRONT_CLOSE     150
 
 // --- Servo Control ---
-#define SERVO_DDR   DDRB
-#define SERVO_PORT  PORTB
-#define SERVO_PIN   PB6 // Assuming PB6 is used for servo PWM (OC1B)
+#define SERVO_DDR   DDRE
+#define SERVO_PORT  PORTE
+#define SERVO_PIN   PE3 // OC3A
+#define SERVO_MIN_PULSE 2000    // ~1ms pulse width (in timer counts)
+#define SERVO_MAX_PULSE 4000    // ~2ms pulse width (in timer counts)
 
 // --- Global Variables for Robot State ---
 static int16_t lm = 0;
@@ -128,29 +130,30 @@ void set_motor_speeds(int16_t lm_speed, int16_t rm_speed) {
 // --- Servo Control ---
 
 /**
- * @brief Initializes PWM for servo control.
- * Uses Timer1 (same as motors) but with specific OCR1B output for servo.
- * The servo is connected to PB6 (OC1B).
+ * @brief Initializes Timer3 for servo PWM on PE3 (OC3A).
  */
 void servo_init() {
-    // Already initialized in pwm_init() for OC1B.
-    // Just ensure the pin is set as output.
-    SERVO_DDR |= (1 << SERVO_PIN);
+    SERVO_DDR |= (1 << SERVO_PIN); // Set PE3 as output
+
+    // Configure Timer 3 for Fast PWM mode 14 (WGM=1110), TOP = ICR3
+    TCCR3A = (1 << COM3A1) | (1 << WGM31);            // Clear OC3A on compare match, set at BOTTOM
+    TCCR3B = (1 << WGM33) | (1 << WGM32) | (1 << CS31); // WGM33:WGM32:WGM31 = 1110, prescaler = 8
+
+    // Set TOP for 50 Hz PWM: 16MHz / (8 * 50) - 1 = 39999
+    ICR3 = 39999;
+
+    // Center servo initially (~1.5ms pulse)
+    OCR3A = 3000;
 }
 
 /**
- * @brief Sets the servo position.
- * @param angle_8bit An 8-bit value (0-255) representing the servo angle.
- * This will be mapped to a suitable PWM pulse width.
- * For a typical servo, 0-255 might map to 0.5ms to 2.5ms pulse width.
+ * @brief Sets the servo position using Timer3 (16-bit, OC3A/PE3).
+ * @param angle_8bit 0-255 value mapped to 1ms–2ms pulse width.
  */
 void set_servo_position(uint8_t angle_8bit) {
-    // Map 0-255 to a suitable OCR1B value for servo control.
-    // Standard servo pulse width: 1ms (0 degrees) to 2ms (180 degrees)
-    // With ICR1 = 10000 (200 Hz PWM), 1ms pulse = 2000 counts, 2ms pulse = 4000 counts.
-    // Let's map 0-255 to 1000 (0.5ms) to 5000 (2.5ms) for a wider range.
-    // This mapping might need calibration based on your specific servo.
-    OCR1B = (uint16_t)(1000 + (uint32_t)angle_8bit * 4000 / 255);
+    // Map 0-255 to 2000-4000 timer counts (1ms to 2ms pulse)
+    uint16_t pulse_width = 2000 + ((uint32_t)angle_8bit * (4000 - 2000) / 255);
+    OCR3A = pulse_width;
 }
 
 // --- ADC Utilities ---
@@ -259,7 +262,7 @@ uint16_t measure_beacon_frequency_mHz() {
     // Frequency is (number of edges / 2) / sample duration in seconds
     // Since edge_count is total edges (rising + falling), divide by 2 for cycles.
     // Convert SAMPLE_DURATION_MS to seconds (divide by 1000).
-    // Result in Hz, then multiply by 1000 for mHz.
+    // Result in Hz, then multiply to 1000 for mHz.
     // (edge_count / 2) / (SAMPLE_DURATION_MS / 1000) * 1000
     // = edge_count * 500 / SAMPLE_DURATION_MS * 1000
     // = edge_count * 500000 / SAMPLE_DURATION_MS
@@ -421,60 +424,33 @@ void send_mode_status(RobotMode mode) {
  * This function should be called periodically in the main loop.
  */
 void process_incoming_serial_data() {
-    if (serial2_available()) { // Checks if there's data available on serial2
-        char debug_msg[64]; // Buffer for debug messages
+    if (serial2_available()) {
+        cli();
+        uint8_t temp_serial2DataByte1 = serial2DataByte1;
+        uint8_t temp_serial2DataByte2 = serial2DataByte2;
+        uint8_t temp_serial2DataByte3 = serial2DataByte3;
+        bool temp_serial2DataReady = serial2DataReady;
+        serial2DataReady = false;
+        sei();
 
-        // Temporarily disable interrupts while reading volatile global variables
-        cli(); // Disable global interrupts
-        // Access the global volatile variables directly as serial2_get_data might not be flexible enough
-        // to get the numBytes from the second byte of the packet before getting the data.
-        // This is a workaround given the current serial.c implementation.
-        // A more robust serial library would allow peeking at the numBytes or passing it.
-        uint8_t temp_serial2DataByte1 = serial2DataByte1; // Get first data byte
-        uint8_t temp_serial2DataByte2 = serial2DataByte2; // Get second data byte
-        uint8_t temp_serial2DataByte3 = serial2DataByte3; // Get third data byte
-        uint8_t temp_serial2DataByte4 = serial2DataByte4; // Get fourth data byte
-        uint8_t temp_serial2DataByte5 = serial2DataByte5; // Get fifth data byte
-        uint8_t temp_serial2DataByte6 = serial2DataByte6; // Get sixth data byte
-        bool temp_serial2DataReady = serial2DataReady; // Checks if the serial data is ready
-        serial2DataReady = false; // Clear the flag after reading
-        sei(); // Enable global interrupts
-
-        if (temp_serial2DataReady) { // If serial data is ready
-            uint8_t command_type = temp_serial2DataByte1; // First data byte is command type
-
-            switch (command_type) {
-                case CMD_SET_MODE: // If the command is to set the mode
-                    // Expected payload: [Mode (0=Autonomous, 1=Remote)]
-                    if (temp_serial2DataByte2 == 0) { // If mode is 0 (Autonomous)
-                        currentRobotMode = MODE_AUTONOMOUS; // Set mode to autonomous
-                        stop(); // Stop motors when switching modes
-                        serial0_print_string("Robot: Switched to Autonomous Mode\n"); // Debug message
-                    } else if (temp_serial2DataByte2 == 1) { // If mode is 1 (Remote Control)
-                        currentRobotMode = MODE_REMOTE_CONTROL; // Set mode to remote control
-                        stop(); // Stop motors when switching modes
-                        serial0_print_string("Robot: Switched to Remote Control Mode\n"); // Debug message
-                    }
-                    send_mode_status(currentRobotMode); // Confirm mode change to controller
-                    break;
-
-                case CMD_JOYSTICK_DATA: // If the command is joystick data
-                    // Expected payload: [X_val] [Y_val]
-                    if (currentRobotMode == MODE_REMOTE_CONTROL) { // Only update if in RC mode
-                        received_x_val = temp_serial2DataByte2; // Store X-axis value
-                        received_y_val = temp_serial2DataByte3; // Store Y-axis value
+        if (temp_serial2DataReady) {
+            switch (temp_serial2DataByte1) {
+                case CMD_JOYSTICK_DATA:
+                    received_x_val = temp_serial2DataByte2;
+                    received_y_val = temp_serial2DataByte3;
+                    {
+                        char debug[32];
+                        snprintf(debug, sizeof(debug), "RX X:%u Y:%u\n", received_x_val, received_y_val);
+                        serial0_print_string(debug);
                     }
                     break;
-
-                case CMD_SERVO_DATA: // If the command is servo data
-                    // Expected payload: [Servo_val]
-                    if (currentRobotMode == MODE_REMOTE_CONTROL) { // Only update if in RC mode
-                        received_servo_val = temp_serial2DataByte2; // Store servo value
-                    }
+                case CMD_SERVO_DATA:
+                    received_servo_val = temp_serial2DataByte2;
                     break;
-
+                case CMD_SET_MODE:
+                    currentRobotMode = (RobotMode)temp_serial2DataByte2;
+                    break;
                 default:
-                    // Removed general "Unknown command received" debug print
                     break;
             }
         }
@@ -531,6 +507,26 @@ int main(void) {
         // --- Battery Check (Always check) ---
         check_battery_and_update_led();
 
+        // --- Beacon Detection (in both modes, but don't stop in RC mode) ---
+        if ((milliseconds_now() - lastBeaconDetectionTime) >= BEACON_COOLDOWN_PERIOD_MS) {
+            if (beacon_detected()) {
+                if (currentRobotMode == MODE_AUTONOMOUS) {
+                    stop();
+                    _delay_ms(100);
+                }
+
+                uint16_t beacon_freq_mHz = measure_beacon_frequency_mHz();
+                snprintf(msg, sizeof(msg), "Robot: Beacon Freq: %u.%03u Hz\n",
+                        beacon_freq_mHz / 1000,
+                        beacon_freq_mHz % 1000);
+                serial0_print_string(msg);
+
+                send_beacon_frequency(beacon_freq_mHz);
+                _delay_ms(500);
+                lastBeaconDetectionTime = milliseconds_now();
+            }
+        }
+
         // --- Mode-specific Logic ---
         if (currentRobotMode == MODE_AUTONOMOUS) {
             // --- Autonomous Movement Logic ---
@@ -551,37 +547,21 @@ int main(void) {
             } else {
                 go_forward();
             }
-
-            // --- Autonomous Beacon Check ---
-            if ((milliseconds_now() - lastBeaconDetectionTime) >= BEACON_COOLDOWN_PERIOD_MS) {
-                if (beacon_detected()) {
-                    stop();
-                    _delay_ms(100);
-
-                    uint16_t beacon_freq_mHz = measure_beacon_frequency_mHz();
-                    snprintf(msg, sizeof(msg), "Robot: Beacon Freq: %u.%03u Hz\n",
-                            beacon_freq_mHz / 1000,
-                            beacon_freq_mHz % 1000);
-                    serial0_print_string(msg);
-
-                    send_beacon_frequency(beacon_freq_mHz);
-                    _delay_ms(500);
-                    lastBeaconDetectionTime = milliseconds_now();
-                }
-            }
-
         } else if (currentRobotMode == MODE_REMOTE_CONTROL) {
             // --- Remote Control Movement Logic ---
-            // Map 0-255 joystick values to motor speeds (-126 to 126)
-            // Y-axis for forward/backward, X-axis for turning
-            int16_t y_motor = (int16_t)received_y_val - 127;
-            int16_t x_motor = (int16_t)received_x_val - 127;
+            int16_t fc = (int16_t)received_y_val - 126;  // Forward/backward
+            int16_t rc = (int16_t)received_x_val - 126;  // Turning
 
-            // Simple tank drive mixing
-            int16_t left_motor_speed = y_motor + x_motor;
-            int16_t right_motor_speed = y_motor - x_motor;
+            // Dead zone (optional, helps with joystick noise)
+            #define DEAD_ZONE 10
+            if (abs(fc) < DEAD_ZONE) fc = 0;
+            if (abs(rc) < DEAD_ZONE) rc = 0;
 
-            // Clamp motor speeds to valid range (-126 to 126)
+            // Calculate left and right motor speeds
+            int16_t left_motor_speed = fc - rc;
+            int16_t right_motor_speed = fc + rc;
+
+            // Clamp speeds to -126..126
             if (left_motor_speed > 126) left_motor_speed = 126;
             if (left_motor_speed < -126) left_motor_speed = -126;
             if (right_motor_speed > 126) right_motor_speed = 126;
@@ -589,16 +569,10 @@ int main(void) {
 
             set_motor_speeds(left_motor_speed, right_motor_speed);
 
-            // --- Remote Control Servo Logic ---
             set_servo_position(received_servo_val);
 
-            // For debugging on robot's serial monitor
-            // This print is already present from previous iteration, good for RC mode
             snprintf(msg, sizeof(msg), "Robot: RC Mode: X:%u Y:%u Servo:%u\n", received_x_val, received_y_val, received_servo_val);
             serial0_print_string(msg);
-
-            // Ensure autonomous logic doesn't interfere in RC mode
-            // No beacon detection or autonomous movement here.
         }
 
         // --- Debug Print for Current Mode ---
